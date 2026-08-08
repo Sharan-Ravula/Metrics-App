@@ -2,6 +2,7 @@ import Foundation
 import UserNotifications
 import AppKit
 
+@MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     static let shared = NotificationManager()
@@ -45,7 +46,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.sound = .default
         if let offendingPID {
             content.categoryIdentifier = "PERF_ALERT"
-            content.userInfo = ["pid": offendingPID]
+            // Stored as Int rather than Int32: NSNumber bridging through an
+            // Any-typed userInfo dictionary reliably supports `as? Int` but
+            // isn't guaranteed to bridge fixed-width types like Int32 the
+            // same way, which would make the cast on read silently fail.
+            content.userInfo = ["pid": Int(offendingPID)]
         }
 
         let request = UNNotificationRequest(identifier: "\(metricKey)-\(now.timeIntervalSince1970)",
@@ -65,7 +70,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
                                              didReceive response: UNNotificationResponse,
                                              withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.actionIdentifier == "QUIT_APP",
-           let pid = response.notification.request.content.userInfo["pid"] as? Int32 {
+           let pid = response.notification.request.content.userInfo["pid"] as? Int {
             NSRunningApplication(processIdentifier: pid_t(pid))?.terminate()
         }
         completionHandler()

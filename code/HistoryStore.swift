@@ -3,6 +3,7 @@ import Foundation
 /// Keeps a rolling window of system + process snapshots in memory for charting,
 /// and appends every snapshot to a JSON-lines file on disk so "last N hours"
 /// queries survive an app relaunch.
+@MainActor
 final class HistoryStore {
 
     // Target coverage for the in-memory buffer: always keep at least this much
@@ -33,7 +34,15 @@ final class HistoryStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         systemLogURL = dir.appendingPathComponent("system_history.jsonl")
         processLogURL = dir.appendingPathComponent("process_history.jsonl")
-        loadRecentFromDisk()
+
+        // Loading can mean decoding tens of thousands of lines (up to 48h of
+        // retention); do the file read + decode off the main actor so launch
+        // doesn't stall, then hop back to assign the result.
+        let url = systemLogURL
+        Task { [weak self] in
+            let loaded = await Self.loadRecentFromDisk(at: url)
+            self?.systemHistory = loaded
+        }
         pruneDiskLogs()
     }
 
@@ -41,11 +50,15 @@ final class HistoryStore {
         systemHistory.append(system)
         processHistory.append(contentsOf: processes)
 
+        // e.g. at a 1s interval we need ~10800 samples for 3 hours; at 5min we
+        // only need ~36. Recompute the cap each time since the user can change
+        // the interval live in Settings.
         let maxInMemorySamples = max(minInMemorySamples, Int(targetCoverageSeconds / max(sampleIntervalSeconds, 1)) + 100)
 
         if systemHistory.count > maxInMemorySamples {
             systemHistory.removeFirst(systemHistory.count - maxInMemorySamples)
         }
+        // Process history grows faster (N processes per tick); cap more aggressively.
         let maxProcessSamples = maxInMemorySamples * 12
         if processHistory.count > maxProcessSamples {
             processHistory.removeFirst(processHistory.count - maxProcessSamples)
@@ -61,6 +74,7 @@ final class HistoryStore {
     }
 
     /// Returns per-app aggregates over the trailing `window` seconds, sorted by avg CPU desc.
+    /// This answers "which app was hammering my Mac over the last hour".
     func topOffenders(window: TimeInterval, limit: Int = 15) -> [ProcessAggregate] {
         let cutoff = Date().addingTimeInterval(-window)
         let recent = processHistory.filter { $0.timestamp >= cutoff }
@@ -76,8 +90,13 @@ final class HistoryStore {
             let maxCPU = snaps.map(\.cpuPercent).max() ?? 0
             let avgMem = UInt64(snaps.reduce(0.0) { $0 + Double($1.memBytes) } / Double(snaps.count))
             let maxMem = snaps.map(\.memBytes).max() ?? 0
+            // Uptime should reflect "how long has it been running as of now",
+            // so use the most recent snapshot's value, not an average or max
+            // across the window (an average of uptimes is meaningless).
+            let latestUptime = snaps.max(by: { $0.timestamp < $1.timestamp })?.uptimeSeconds
             return ProcessAggregate(name: name, avgCPUPercent: avgCPU, maxCPUPercent: maxCPU,
-                                     avgMemBytes: avgMem, maxMemBytes: maxMem, sampleCount: snaps.count)
+                                     avgMemBytes: avgMem, maxMemBytes: maxMem, sampleCount: snaps.count,
+                                     uptimeSeconds: latestUptime)
         }
 
         return aggregates.sorted { $0.avgCPUPercent > $1.avgCPUPercent }.prefix(limit).map { $0 }
@@ -91,16 +110,19 @@ final class HistoryStore {
 
     /// Rewrites both log files keeping only entries within the retention
     /// window, so disk usage stays bounded no matter how long the app runs.
-    private func pruneDiskLogs() {
-        fileQueue.async { [weak self] in
-            guard let self else { return }
-            let cutoff = Date().addingTimeInterval(-self.diskRetentionSeconds)
-            self.pruneFile(at: self.systemLogURL, cutoff: cutoff) { (snap: SystemSnapshot) in snap.timestamp }
-            self.pruneFile(at: self.processLogURL, cutoff: cutoff) { (snap: ProcessSnapshot) in snap.timestamp }
+    /// Runs on the background file queue, roughly every ~300 samples rather
+    /// than every tick, to keep the I/O cost low.
+    private nonisolated func pruneDiskLogs() {
+        let systemLogURL = self.systemLogURL
+        let processLogURL = self.processLogURL
+        let cutoff = Date().addingTimeInterval(-diskRetentionSeconds)
+        fileQueue.async {
+            Self.pruneFile(at: systemLogURL, cutoff: cutoff) { (snap: SystemSnapshot) in snap.timestamp }
+            Self.pruneFile(at: processLogURL, cutoff: cutoff) { (snap: ProcessSnapshot) in snap.timestamp }
         }
     }
 
-    private func pruneFile<T: Codable>(at url: URL, cutoff: Date, timestamp: (T) -> Date) {
+    private nonisolated static func pruneFile<T: Codable>(at url: URL, cutoff: Date, timestamp: (T) -> Date) {
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) else { return }
 
@@ -120,16 +142,18 @@ final class HistoryStore {
 
     // MARK: - Disk persistence
 
-    private func appendToDisk(system: SystemSnapshot, processes: [ProcessSnapshot]) {
+    private nonisolated func appendToDisk(system: SystemSnapshot, processes: [ProcessSnapshot]) {
+        let systemLogURL = self.systemLogURL
+        let processLogURL = self.processLogURL
         fileQueue.async {
-            self.appendLine(system, to: self.systemLogURL)
+            Self.appendLine(system, to: systemLogURL)
             for p in processes {
-                self.appendLine(p, to: self.processLogURL)
+                Self.appendLine(p, to: processLogURL)
             }
         }
     }
 
-    private func appendLine<T: Encodable>(_ value: T, to url: URL) {
+    private nonisolated static func appendLine<T: Encodable>(_ value: T, to url: URL) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         guard let handle = try? FileHandle(forWritingTo: url) else {
             try? data.write(to: url)
@@ -143,10 +167,16 @@ final class HistoryStore {
     }
 
     /// On launch, load the last 24 hours of system history from disk so charts
-    /// aren't empty immediately after a relaunch.
-    private func loadRecentFromDisk() {
+    /// aren't empty immediately after a relaunch. Process history is not
+    /// preloaded (it's large); it repopulates live within a few minutes.
+    ///
+    /// `nonisolated` + `async` so this (potentially tens of thousands of lines
+    /// of JSON decoding, up to 48h of retention) runs off the main actor
+    /// instead of blocking app launch; the caller hops back to assign the
+    /// result to the actor-isolated `systemHistory`.
+    private nonisolated static func loadRecentFromDisk(at systemLogURL: URL) async -> [SystemSnapshot] {
         guard let data = try? Data(contentsOf: systemLogURL),
-              let text = String(data: data, encoding: .utf8) else { return }
+              let text = String(data: data, encoding: .utf8) else { return [] }
 
         let cutoff = Date().addingTimeInterval(-24 * 3600)
         let decoder = JSONDecoder()
@@ -158,12 +188,19 @@ final class HistoryStore {
                 loaded.append(snap)
             }
         }
-        systemHistory = Array(loaded.suffix(20000))
+        // Interval isn't known yet at load time (Settings may change it later),
+        // so cap generously here; record() will re-trim to the right size once
+        // sampling starts and the real interval is known.
+        return Array(loaded.suffix(20000))
     }
 }
 
 private extension Data {
-    func append(to url: URL) throws {
+    // The project defaults every declaration to @MainActor isolation
+    // (SWIFT_DEFAULT_ACTOR_ISOLATION); this is pure file I/O called from
+    // HistoryStore's nonisolated appendLine(_:to:), off the main actor, so
+    // it needs to opt back out explicitly.
+    nonisolated func append(to url: URL) throws {
         guard let handle = try? FileHandle(forWritingTo: url) else {
             try self.write(to: url)
             return

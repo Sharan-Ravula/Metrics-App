@@ -31,7 +31,11 @@ struct DashboardView: View {
         .navigationTitle("Performance Monitor")
         .onAppear {
             DispatchQueue.main.async {
-                NSApp.windows.first(where: { $0.isVisible })?.setFrameAutosaveName("PerfMonitorMainWindow")
+                // Match by title, not just visibility — the Settings window
+                // is a separate Scene that can also be visible/enumerated
+                // here, and only one window can hold a given autosave name.
+                NSApp.windows.first(where: { $0.title == "Performance Monitor" })?
+                    .setFrameAutosaveName("PerfMonitorMainWindow")
             }
         }
     }
@@ -77,23 +81,12 @@ struct DashboardView: View {
                 color: engine.current?.gpuTempC.map { Severity.color(forCelsius: $0) } ?? .secondary,
                 fallbackText: engine.current?.gpuTempC == nil ? "N/A" : nil,
                 badge: engine.current?.thermalPressure,
-                badgeColor: thermalColor
+                badgeColor: Severity.color(forThermalPressure: engine.current?.thermalPressure)
             )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
-    }
-
-    private var thermalColor: Color {
-        switch engine.current?.thermalPressure {
-        case "Nominal": return .green
-        case "Moderate": return .blue
-        case "Heavy": return .orange
-        case "Trapping": return .pink
-        case "Sleeping": return .red
-        default: return .secondary
-        }
     }
 }
 

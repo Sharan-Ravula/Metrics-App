@@ -34,6 +34,7 @@ enum MenuBarMetric: String, CaseIterable, Identifiable {
 }
 
 /// UserDefaults-backed settings, published so SwiftUI views update live.
+@MainActor
 final class SettingsStore: ObservableObject {
 
     static let shared = SettingsStore()
@@ -60,6 +61,9 @@ final class SettingsStore: ObservableObject {
 
     @Published var chartLookback: TimeWindow {
         didSet { defaults.set(chartLookback.rawValue, forKey: Keys.chartLookback) }
+    }
+    @Published var chartStyle: ChartStyle {
+        didSet { defaults.set(chartStyle.rawValue, forKey: Keys.chartStyle) }
     }
     @Published var historyTableWindow: TimeWindow {
         didSet { defaults.set(historyTableWindow.rawValue, forKey: Keys.historyTableWindow) }
@@ -99,6 +103,7 @@ final class SettingsStore: ObservableObject {
         static let liveViewMode = "settings.liveViewMode"
         static let historyViewMode = "settings.historyViewMode"
         static let chartLookback = "settings.chartLookback"
+        static let chartStyle = "settings.chartStyle"
         static let historyTableWindow = "settings.historyTableWindow"
         static let refreshInterval = "settings.refreshInterval"
         static let notificationsEnabled = "settings.notificationsEnabled"
@@ -114,6 +119,7 @@ final class SettingsStore: ObservableObject {
         liveViewMode = ProcessViewMode(rawValue: defaults.string(forKey: Keys.liveViewMode) ?? "") ?? .table
         historyViewMode = ProcessViewMode(rawValue: defaults.string(forKey: Keys.historyViewMode) ?? "") ?? .table
         chartLookback = TimeWindow(rawValue: defaults.string(forKey: Keys.chartLookback) ?? "") ?? .fifteenMinutes
+        chartStyle = ChartStyle(rawValue: defaults.string(forKey: Keys.chartStyle) ?? "") ?? .line
         historyTableWindow = TimeWindow(rawValue: defaults.string(forKey: Keys.historyTableWindow) ?? "") ?? .oneHour
         let storedInterval = defaults.object(forKey: Keys.refreshInterval) as? Double ?? 2.0
         refreshIntervalSeconds = storedInterval.clamped(to: 1...300)

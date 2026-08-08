@@ -6,7 +6,17 @@ struct SettingsView: View {
     @EnvironmentObject var engine: MonitorEngine
 
     private let sudoersCommand = "sudo visudo -f /etc/sudoers.d/powermetrics"
-    private var sudoersLine: String { "\(NSUserName()) ALL=(root) NOPASSWD: /usr/bin/powermetrics" }
+    // Grants two things: running powermetrics itself, and killing it again
+    // by PID with SIGINT or SIGKILL. Both are needed — the app can't
+    // terminate a root-owned process it isn't root itself, and relying on
+    // `sudo` to relay a signal to the child it launched turned out to be
+    // unreliable (confirmed via `ps`: repeated restarts leaked a new
+    // root-owned powermetrics process every time). The kill grants are
+    // scoped to exactly `kill -INT <pid>` / `kill -9 <pid>` — not a general
+    // "run anything as root" permission.
+    private var sudoersLine: String {
+        "\(NSUserName()) ALL=(root) NOPASSWD: /usr/bin/powermetrics, /bin/kill -INT [0-9]*, /bin/kill -9 [0-9]*"
+    }
 
     var body: some View {
         Form {
@@ -17,7 +27,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                caption("How often the app takes a new reading. This is separate from the \"Show last\" controls elsewhere in the app, which just control how much of the already-collected history you're currently looking at.")
+                caption("How often the app takes a new reading. This is separate from the \"Show last\" controls elsewhere in the app, which just control how much of the already-collected history you're currently looking at. Note: at the fastest \"1s\" setting, the process list can lag a tick behind the CPU/Memory numbers — it needs a short window of its own to measure accurate per-process CPU%.")
             }
 
             Section("Units") {
@@ -89,7 +99,7 @@ struct SettingsView: View {
                     Text(engine.gpuAvailable ? "GPU monitoring is active" : "GPU monitoring is not active yet")
                         .font(.callout)
                 }
-                caption("GPU % comes from Apple's powermetrics tool, which requires admin access. To avoid a password prompt every couple seconds, allow it to run passwordlessly, just this one command, for just your user:")
+                caption("GPU % comes from Apple's powermetrics tool, which requires admin access to run — and, separately, to stop again. To avoid a password prompt every couple seconds (and to let the app clean up after itself instead of leaking background processes), allow both passwordlessly, just for your user:")
 
                 HStack {
                     Text(sudoersCommand)
@@ -109,7 +119,7 @@ struct SettingsView: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                     Button("Copy") { copyToPasteboard(sudoersLine) }
                 }
-                caption("2. Copy that line into the editor — it already has your actual Mac username filled in.\n3. Save and quit (in the default nano editor, that's Control-X, then Y, then Return).\n4. Quit and reopen this app. The GPU card should now show real numbers.")
+                caption("2. Copy that line into the editor — it already has your actual Mac username filled in.\n3. Save and quit (in the default nano editor, that's Control-X, then Y, then Return).\n4. Quit and reopen this app. The GPU card should now show real numbers.\n\nAlready set this up before this version? The old line only covered running powermetrics, not stopping it — re-run the steps above with the updated line to replace it, or background powermetrics processes will pile up over time.")
             }
 
             Section("Temperature") {

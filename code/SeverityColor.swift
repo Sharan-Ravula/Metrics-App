@@ -26,6 +26,18 @@ enum Severity {
         return colorForNormalized(normalized)
     }
 
+    /// For powermetrics' thermal_pressure levels.
+    static func color(forThermalPressure pressure: String?) -> Color {
+        switch pressure {
+        case "Nominal": return .green
+        case "Moderate": return .blue
+        case "Heavy": return .orange
+        case "Trapping": return .pink
+        case "Sleeping": return .red
+        default: return .secondary
+        }
+    }
+
     private static func colorForNormalized(_ raw: Double) -> Color {
         let t = min(max(raw, 0), 1)
         let stops: [(Double, NSColor)] = [

@@ -10,8 +10,7 @@ enum ChartStyle: String, CaseIterable, Identifiable {
 
 struct ChartsView: View {
     @EnvironmentObject var engine: MonitorEngine
-    @State private var lookback = TimeWindow.fifteenMinutes
-    @State private var chartStyle: ChartStyle = .line
+    @ObservedObject var settings = SettingsStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -19,7 +18,7 @@ struct ChartsView: View {
                 Text("History Graphs")
                     .font(.title3.bold())
                 Spacer()
-                Picker("Chart type", selection: $chartStyle) {
+                Picker("Chart type", selection: $settings.chartStyle) {
                     ForEach(ChartStyle.allCases) { style in
                         Text(style.rawValue).tag(style)
                     }
@@ -28,18 +27,18 @@ struct ChartsView: View {
                 .frame(width: 180)
             }
 
-            TimeWindowPicker(selection: $lookback)
+            TimeWindowPicker(selection: $settings.chartLookback)
             Text("Hover any chart to see the exact value and time at that point.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            let points = engine.history.systemHistory(window: lookback.seconds)
+            let points = engine.history.systemHistory(window: settings.chartLookback.seconds)
 
             HStack(alignment: .top, spacing: 12) {
-                HoverableMetricChart(title: "CPU %", points: points, color: .blue, style: chartStyle) { $0.cpuUsagePercent }
-                HoverableMetricChart(title: "Memory %", points: points, color: .green, style: chartStyle) { $0.memUsedPercent }
+                HoverableMetricChart(title: "CPU %", points: points, color: .blue, style: settings.chartStyle) { $0.cpuUsagePercent }
+                HoverableMetricChart(title: "Memory %", points: points, color: .green, style: settings.chartStyle) { $0.memUsedPercent }
                 if engine.gpuAvailable {
-                    HoverableMetricChart(title: "GPU %", points: points, color: .purple, style: chartStyle) { $0.gpuActivePercent ?? 0 }
+                    HoverableMetricChart(title: "GPU %", points: points, color: .purple, style: settings.chartStyle) { $0.gpuActivePercent }
                 }
             }
         }
@@ -53,9 +52,17 @@ struct HoverableMetricChart: View {
     let points: [SystemSnapshot]
     let color: Color
     let style: ChartStyle
-    let valueForPoint: (SystemSnapshot) -> Double
+    // Optional so a genuinely-missing reading (e.g. GPU % before powermetrics
+    // has reported anything yet) can be told apart from an actual 0.
+    let valueForPoint: (SystemSnapshot) -> Double?
 
     @State private var hoverPoint: SystemSnapshot?
+
+    // The chart itself still needs a concrete number per point to plot;
+    // missing values are drawn as 0 so the line/bar/area stays continuous.
+    private func plotValue(_ point: SystemSnapshot) -> Double {
+        valueForPoint(point) ?? 0
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -65,9 +72,15 @@ struct HoverableMetricChart: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let hoverPoint {
-                    Text("\(Int(valueForPoint(hoverPoint)))%  ·  \(hoverPoint.timestamp.formatted(date: .omitted, time: .standard))")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(color)
+                    if let value = valueForPoint(hoverPoint) {
+                        Text("\(Int(value))%  ·  \(hoverPoint.timestamp.formatted(date: .omitted, time: .standard))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(color)
+                    } else {
+                        Text("No data  ·  \(hoverPoint.timestamp.formatted(date: .omitted, time: .standard))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -75,14 +88,14 @@ struct HoverableMetricChart: View {
                 ForEach(points) { point in
                     switch style {
                     case .line:
-                        LineMark(x: .value("Time", point.timestamp), y: .value(title, valueForPoint(point)))
+                        LineMark(x: .value("Time", point.timestamp), y: .value(title, plotValue(point)))
                             .foregroundStyle(color)
                             .interpolationMethod(.monotone)
                     case .bar:
-                        BarMark(x: .value("Time", point.timestamp), y: .value(title, valueForPoint(point)))
+                        BarMark(x: .value("Time", point.timestamp), y: .value(title, plotValue(point)))
                             .foregroundStyle(color)
                     case .area:
-                        AreaMark(x: .value("Time", point.timestamp), y: .value(title, valueForPoint(point)))
+                        AreaMark(x: .value("Time", point.timestamp), y: .value(title, plotValue(point)))
                             .foregroundStyle(color.opacity(0.5))
                             .interpolationMethod(.monotone)
                     }
@@ -91,7 +104,7 @@ struct HoverableMetricChart: View {
                 if let hoverPoint {
                     RuleMark(x: .value("Time", hoverPoint.timestamp))
                         .foregroundStyle(.secondary.opacity(0.4))
-                    PointMark(x: .value("Time", hoverPoint.timestamp), y: .value(title, valueForPoint(hoverPoint)))
+                    PointMark(x: .value("Time", hoverPoint.timestamp), y: .value(title, plotValue(hoverPoint)))
                         .foregroundStyle(color)
                         .symbolSize(70)
                 }

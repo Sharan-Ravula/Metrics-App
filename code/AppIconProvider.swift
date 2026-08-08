@@ -8,20 +8,30 @@ final class AppIconProvider {
 
     func icon(for processName: String) -> NSImage {
         if let cached = cache[processName] { return cached }
-        let icon = lookupIcon(for: processName)
+        // Only cache a genuine match. A process sampled before its owning app
+        // finishes registering with NSWorkspace (e.g. still launching) would
+        // otherwise get the generic fallback icon cached permanently, even
+        // after the real app shows up in runningApplications moments later.
+        guard let icon = lookupIcon(for: processName) else { return fallbackIcon }
         cache[processName] = icon
         return icon
     }
 
-    private func lookupIcon(for processName: String) -> NSImage {
+    private func lookupIcon(for processName: String) -> NSImage? {
         let apps = NSWorkspace.shared.runningApplications
-        if let match = apps.first(where: { app in
+        // Prefer an exact name match over a partial one, so a short/ambiguous
+        // process name (e.g. "Terminal") can't pick up some unrelated app's
+        // icon just because that app's name happens to be a prefix/suffix.
+        if let exact = apps.first(where: { $0.localizedName?.caseInsensitiveCompare(processName) == .orderedSame }) {
+            return exact.icon
+        }
+        if let partial = apps.first(where: { app in
             guard let name = app.localizedName, !name.isEmpty else { return false }
             return processName.hasPrefix(name) || name.hasPrefix(processName)
         }) {
-            return match.icon ?? fallbackIcon
+            return partial.icon
         }
-        return fallbackIcon
+        return nil
     }
 
     private var fallbackIcon: NSImage {

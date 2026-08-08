@@ -47,7 +47,7 @@ struct MenuBarContentView: View {
                                color: Severity.color(forCelsius: temp))
                 }
                 if let pressure = snap.thermalPressure {
-                    metricRow("Thermal", pressure, color: thermalColor(for: pressure))
+                    metricRow("Thermal", pressure, color: Severity.color(forThermalPressure: pressure))
                 }
             } else {
                 Text("Loading…")
@@ -86,16 +86,5 @@ struct MenuBarContentView: View {
                 .foregroundStyle(color)
         }
         .font(.system(size: 13))
-    }
-
-    private func thermalColor(for pressure: String) -> Color {
-        switch pressure {
-        case "Nominal": return .green
-        case "Moderate": return .blue
-        case "Heavy": return .orange
-        case "Trapping": return .pink
-        case "Sleeping": return .red
-        default: return .secondary
-        }
     }
 }

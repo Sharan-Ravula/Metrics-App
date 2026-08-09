@@ -13,6 +13,12 @@ struct ProcessListView: View {
     @ObservedObject var settings = SettingsStore.shared
 
     private let reorderInterval: TimeInterval = 10
+    // topOffenders(window:) regroups the whole trailing window (up to an
+    // hour of samples) from scratch on every call. That average barely moves
+    // tick to tick, so recomputing it every refresh (as fast as once a
+    // second) was pure waste — this caps it to a fixed cadence independent
+    // of the refresh rate.
+    private let historyRecomputeInterval: TimeInterval = 10
 
     @State private var liveOrder: [String] = []
     @State private var lastLiveReorder = Date.distantPast
@@ -20,6 +26,7 @@ struct ProcessListView: View {
 
     @State private var historyOrder: [String] = []
     @State private var lastHistoryReorder = Date.distantPast
+    @State private var lastHistoryRecompute = Date.distantPast
     @State private var historyRows: [ProcessAggregate] = []
 
     var body: some View {
@@ -37,7 +44,10 @@ struct ProcessListView: View {
         }
         .onChange(of: settings.historyTableWindow) { _, _ in
             historyOrder = []
-            updateHistoryRows()
+            // The window itself just changed, so the old aggregate is now
+            // for the wrong range — recompute immediately rather than
+            // waiting out the throttle below.
+            updateHistoryRows(force: true)
         }
     }
 
@@ -141,8 +151,13 @@ struct ProcessListView: View {
         liveRows = liveOrder.compactMap { dict[$0] }
     }
 
-    private func updateHistoryRows() {
+    private func updateHistoryRows(force: Bool = false) {
         let now = Date()
+        guard force || historyRows.isEmpty || now.timeIntervalSince(lastHistoryRecompute) > historyRecomputeInterval else {
+            return
+        }
+        lastHistoryRecompute = now
+
         let current = engine.history.topOffenders(window: settings.historyTableWindow.seconds)
         let dict = Dictionary(current.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
 

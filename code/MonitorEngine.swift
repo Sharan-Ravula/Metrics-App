@@ -102,7 +102,11 @@ final class MonitorEngine: ObservableObject {
 
         let sampler = processSampler
         let soc = socReader
-        Task.detached(priority: .userInitiated) {
+        // .utility, not .userInitiated: this is routine recurring background
+        // polling (top/ps + sensor reads), not user-blocking work. The higher
+        // priority was biasing the scheduler toward performance cores for no
+        // benefit, since nothing is waiting on this synchronously.
+        Task.detached(priority: .utility) {
             let processes = sampler.sampleTopProcesses(limit: 15)
             let tempReading = soc?.sampleOnce()
             await MainActor.run { [weak self] in

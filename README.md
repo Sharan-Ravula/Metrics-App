@@ -6,6 +6,20 @@ Built with SwiftUI for macOS 14+.
 
 ![platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue) ![swift](https://img.shields.io/badge/swift-5.9%2B-orange)
 
+## Screenshots
+
+**Dashboard** — live CPU/Memory/GPU/temperature tiles, history charts, and live + historical per-app tables side by side:
+
+![Dashboard overview](UI-Overview/Metrics-Overview.png)
+
+**Settings** — refresh rate, units, menu bar metric, notification thresholds, and the GPU % passwordless-sudo setup:
+
+![Settings window](UI-Overview/Metrics-settings.png)
+
+**Per-app views** — the same live/historical data as pie and bar charts, not just tables:
+
+![Pie and bar chart views](UI-Overview/different-graphs.png)
+
 ## Features
 
 - **Live system metrics** — CPU %, Memory %, GPU %, CPU/GPU temperature, package power draw, and macOS's own Thermal Pressure state, all color-coded by severity (green → blue → orange → pink → red)
